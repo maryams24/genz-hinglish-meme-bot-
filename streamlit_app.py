@@ -13,11 +13,11 @@ import streamlit.components.v1 as components
 # =============================
 # Config
 # =============================
-st.set_page_config(page_title="Office Chatbot (FAAH)", layout="centered")
+st.set_page_config(page_title="Office Chatbot (FAAH + Celebrate)", layout="centered")
 random.seed()
 
 # =============================
-# UI (dark aesthetic bg + readable glass surfaces)
+# UI (dark bg + readable glass surfaces)
 # =============================
 st.markdown(
     """
@@ -111,6 +111,10 @@ def ss_init():
         st.session_state.faah_upload_name = None
     if "_queued_input" not in st.session_state:
         st.session_state._queued_input = None
+    if "pending_fx" not in st.session_state:
+        st.session_state.pending_fx = None  # "balloons" | "snow" | "fire"
+    if "pending_toast" not in st.session_state:
+        st.session_state.pending_toast = None
 
 ss_init()
 
@@ -134,7 +138,6 @@ def _to_wav_bytes(sr: int, samples_f32: list[float]) -> bytes:
     return buf.getvalue()
 
 def make_faah_synth_wav() -> bytes:
-    # Short comedic down-sweep + noise burst
     sr, dur = 22050, 0.26
     n = int(sr * dur)
     out = []
@@ -187,7 +190,7 @@ def render_autoplay_audio(audio_bytes: bytes, mime: str, nonce: int):
     components.html(html, height=0, width=0)
 
 # =============================
-# FAAH trigger phrases (corporate pain points)
+# FAAH triggers (corporate pain points)
 # =============================
 TRIGGERS_LOW = [
     r"\bclient\b.*\bnew ideas?\b",
@@ -201,7 +204,7 @@ TRIGGERS_MED = TRIGGERS_LOW + [
     r"\bquick deck\b",
     r"\bby eod\b|\beod\b",
     r"\basap\b",
-    r"\bcan we hop on a quick call\b|\bquick call\b",
+    r"\bquick call\b|\bhop on\b.*\bcall\b",
     r"\brebaseline\b",
     r"\bscope change\b|\bchange request\b",
     r"\bkeep it simple\b.*\bimpactful\b",
@@ -224,21 +227,45 @@ def should_play_faah(text: str, sensitivity: str) -> bool:
     return any(re.search(p, t) for p in patterns)
 
 # =============================
-# Corporate Hinglish jokes (light, not overdone)
+# Celebrate triggers (good news)
+# =============================
+GOOD_NEWS_PATTERNS = [
+    r"\bgood news\b",
+    r"\bwe won\b|\bwe won the\b",
+    r"\bapproved\b|\bapproval\b|\bgreen light\b",
+    r"\bsigned\b|\bcontract signed\b|\bpo issued\b",
+    r"\bgo[- ]live\b|\blaunch(ed)?\b",
+    r"\bkudos\b|\bshoutout\b|\bappreciation\b",
+    r"\bpromotion\b|\bincrement\b|\braise\b",
+    r"\bclient loved\b|\bclient happy\b|\bpositive feedback\b",
+    r"\bpassed\b.*\buat\b|\buat passed\b",
+]
+
+def is_good_news(text: str) -> bool:
+    t = (text or "").lower().strip()
+    return any(re.search(p, t) for p in GOOD_NEWS_PATTERNS)
+
+# =============================
+# Corporate Hinglish jokes (light)
 # =============================
 FAAH_QUIPS = [
     "FAAH. ‘Small change’ ka matlab: full redesign, bas emotionally.",
     "FAAH. Client ne bola ‘quick deck’—calendar ne bola ‘good luck’.",
-    "FAAH. ‘EOD’ is a feeling, not a time.",
-    "FAAH. ‘Keep it simple’ + ‘make it impactful’ = two bosses, one brain.",
+    "FAAH. ‘EOD’ is a feeling, not a time. Yaar.",
+    "FAAH. ‘Keep it simple’ + ‘make it impactful’ = do bosses, one brain.",
     "FAAH. ‘Quick call’ = 5 mins + 43 mins of “context setting”.",
-    "FAAH. ‘Circle back’ = round-trip ticket to nowhere.",
+    "FAAH. ‘Circle back’ = round-trip ticket to nowhere, bhai.",
     "FAAH. ‘Low effort, high impact’—haan, like magic.",
     "FAAH. ‘One last thing’—aur phir last ke 7 cousins aate hain.",
     "FAAH. ‘Make it pop’—PowerPoint bhi therapist maang raha hai.",
     "FAAH. ‘New ideas’ with same budget—innovation ka jugaad edition.",
 ]
-
+GOOD_NEWS_QUIPS = [
+    "W. Aaj toh deliverable ne smile diya. Shabaash.",
+    "Client happy? Matlab universe thoda balance mein hai.",
+    "Green light mil gaya—ab bas scope ko green mat kar dena.",
+    "UAT passed? Party nahi, but ek chai toh banti hai.",
+]
 TINY_NORMAL_QUIPS = [
     "Noted—clean, crisp, client-safe.",
     "Got it. We’ll keep it short and usable.",
@@ -249,33 +276,34 @@ TINY_NORMAL_QUIPS = [
 # =============================
 # Office response engine
 # =============================
-def office_reply(user_text: str, faah_hit: bool) -> str:
+def office_reply(user_text: str, faah_hit: bool, good_hit: bool) -> str:
     t = (user_text or "").strip()
     low = t.lower()
 
-    # Commands (optional)
     if low == "/help":
         return (
-            "Office bot commands:\n"
-            "- /triggers (show FAAH triggers)\n"
-            "- /faah (play sound)\n"
+            "Commands:\n"
+            "- /faah (play FAAH)\n"
+            "- /triggers (show what triggers FAAH)\n"
             "- /help\n\n"
-            "Otherwise, ask for: email / standup / agenda / RAID / notes / slides / workplan."
+            "Ask for: email / standup / agenda / RAID / notes / slides / workplan."
         )
     if low == "/triggers":
-        return (
-            "FAAH triggers depend on sidebar sensitivity.\n"
-            "Common ones: client new ideas, small change, quick deck, EOD, ASAP, quick call, circle back, make it pop."
-        )
+        return "FAAH triggers (by sensitivity): client new ideas, small change, quick deck, EOD/ASAP, quick call, circle back, make it pop."
     if low == "/faah":
         return "FAAH triggered (manual)."
 
-    # Specific office asks
+    if good_hit:
+        return (
+            f"{random.choice(GOOD_NEWS_QUIPS)}\n\n"
+            "Want me to turn this into a client-safe update?\n"
+            "Send: what happened + metric + next step + ask (if any). (Hinglish chalega)"
+        )
+
     if any(k in low for k in ["standup", "status update", "daily update", "scrum"]):
         return (
             f"{random.choice(TINY_NORMAL_QUIPS)}\n\n"
-            "Paste your raw bullets; I’ll tighten them. Template:\n"
-            "Done:\n- \n\nNext:\n- \n\nBlockers/Risks:\n- \n\nAsk (if any):\n- "
+            "Template:\nDone:\n- \n\nNext:\n- \n\nBlockers/Risks:\n- \n\nAsk (if any):\n- "
         )
 
     if any(k in low for k in ["email", "mail", "slack", "teams", "message"]):
@@ -294,81 +322,51 @@ def office_reply(user_text: str, faah_hit: bool) -> str:
     if any(k in low for k in ["agenda", "meeting agenda"]):
         return (
             f"{random.choice(TINY_NORMAL_QUIPS)}\n\n"
-            "30-min client check-in agenda:\n"
-            "1) Purpose + desired outcome (2 min)\n"
-            "2) Progress since last meeting (8 min)\n"
-            "3) Decisions needed today (8 min)\n"
-            "4) Risks/blockers + mitigations (6 min)\n"
-            "5) Next steps + owners + dates (6 min)\n\n"
-            "Share topic + attendees, I’ll tailor it."
+            "30-min agenda:\n"
+            "1) Outcomes (2)\n2) Progress (8)\n3) Decisions (8)\n4) Risks (6)\n5) Next steps (6)\n\n"
+            "Share topic + attendees; I’ll tailor it."
         )
 
     if any(k in low for k in ["mom", "minutes", "meeting notes", "notes"]):
         return (
             f"{random.choice(TINY_NORMAL_QUIPS)}\n\n"
-            "Meeting notes template:\n"
-            "Context:\n- \n\nAttendees:\n- \n\nDecisions:\n- \n\nActions (Owner | Due | Item):\n- \n\nRisks/Issues:\n- "
+            "Meeting notes template:\nContext:\n- \n\nAttendees:\n- \n\nDecisions:\n- \n\nActions (Owner | Due | Item):\n- \n\nRisks/Issues:\n- "
         )
 
     if any(k in low for k in ["raid", "risk", "issue", "blocker", "dependency", "assumption"]):
         return (
             f"{random.choice(TINY_NORMAL_QUIPS)}\n\n"
-            "RAID entry format:\n"
-            "Type: Risk/Issue/Assumption/Dependency\n"
-            "Description:\n"
-            "Impact:\n"
-            "Likelihood (if risk): Low/Med/High\n"
-            "Owner:\n"
-            "Mitigation / next step:\n"
-            "Due date:\n"
-            "Status: Open/Monitoring/Closed\n\n"
-            "Paste your sentence and I’ll convert it."
+            "RAID entry:\nType:\nDescription:\nImpact:\nLikelihood:\nOwner:\nMitigation:\nDue:\nStatus:\n\nPaste your sentence and I’ll format it."
         )
 
     if any(k in low for k in ["slides", "deck", "ppt", "storyline"]):
         return (
             f"{random.choice(TINY_NORMAL_QUIPS)}\n\n"
-            "Default 6-slide storyline:\n"
-            "1) Context + objective\n"
-            "2) Current state (facts)\n"
-            "3) Insights (3–5)\n"
-            "4) Options (2–3) + trade-offs\n"
-            "5) Recommendation + rationale\n"
-            "6) Roadmap + risks + asks\n\n"
-            "Tell me audience + decision + time limit."
+            "6-slide storyline:\n1) Context\n2) Current state\n3) Insights\n4) Options + trade-offs\n5) Recommendation\n6) Roadmap + risks\n\n"
+            "Tell me audience + decision + time."
         )
 
     if any(k in low for k in ["workplan", "project plan", "timeline", "plan"]):
         return (
             f"{random.choice(TINY_NORMAL_QUIPS)}\n\n"
-            "4-week workplan starter:\n"
-            "W1: align scope, stakeholders, success metrics\n"
-            "W2: current-state + gaps\n"
-            "W3: options + sizing/business case\n"
-            "W4: recommendation + roadmap + exec readout\n\n"
-            "Tell me duration and deliverables, I’ll adapt it."
+            "Workplan starter:\nW1 align\nW2 assess\nW3 options\nW4 recommend + roadmap\n\nTell me duration + deliverables."
         )
 
-    # If FAAH trigger happened, respond with jokes + structured ideation help
     if faah_hit:
         return (
             f"{random.choice(FAAH_QUIPS)}\n\n"
-            "Okay, corporate-mode ON. Fast idea generation format (client-safe):\n"
-            "A) ‘Optimize’ ideas (low risk): automate steps, reduce cycle time, simplify approvals, improve reporting\n"
-            "B) ‘Enable’ ideas (medium): new analytics, new workflow, self-serve portal, better governance/RACI\n"
-            "C) ‘Transform’ ideas (bold): operating model shift, new product/capability, managed service, partner ecosystem\n\n"
-            "Bas 3 inputs do (Hinglish allowed): objective, constraints, and who decides."
+            "Client-ready idea structure (fast):\n"
+            "A) Optimize (low risk)\nB) Enable (medium)\nC) Transform (bold)\n\n"
+            "Bas 3 inputs do: objective, constraints, and decision-maker."
         )
 
-    # Default
     return (
         f"{random.choice(TINY_NORMAL_QUIPS)}\n\n"
-        "Tell me what you need: email / standup / agenda / RAID / notes / slides / workplan. "
-        "If you paste rough text, I’ll rewrite it cleanly (Hinglish bhi chalega)."
+        "Tell me: email / standup / agenda / RAID / notes / slides / workplan. Paste rough text; I’ll rewrite it cleanly."
     )
 
 # =============================
-# Sidebar (upload + controls + shortcuts)
+# Sidebar controls
 # =============================
 with st.sidebar:
     st.subheader("FAAH sound")
@@ -385,43 +383,26 @@ with st.sidebar:
         st.success("Sound enabled.")
 
     sensitivity = st.selectbox("FAAH sensitivity", ["Low", "Medium", "High"], index=2)
-    show_triggers = st.toggle("Show trigger examples", value=False)
-    if show_triggers:
-        st.caption("Examples that trigger FAAH:")
-        examples = [
-            "Client is asking for new ideas by EOD",
-            "Small change… just make it pop",
-            "Can we hop on a quick call ASAP?",
-            "Let’s circle back and rebaseline",
-            "Quick deck tonight please",
-        ]
-        st.write("\n".join([f"- {e}" for e in examples]))
 
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("Preview FAAH"):
-            b, m, label = get_faah_bytes()
-            st.caption(label)
-            st.audio(b, format=m)
-    with c2:
-        if st.button("Play FAAH now"):
-            st.session_state._queued_input = "/faah"
+    st.divider()
+    st.subheader("Celebrate FX (good news)")
+    celebrate_fx = st.radio("Effect", ["Balloons", "Snow (sprinkle)", "Fire toast only", "Off"], index=0)
+    st.caption("Triggers on ‘good news’, ‘approved’, ‘we won’, ‘go-live’, etc.")
 
     st.divider()
     st.subheader("Shortcuts")
-    st.caption("Click to insert a prompt.")
-    if st.button("Client wants new ideas (FAAH)"):
-        st.session_state._queued_input = "Client is asking for new ideas by EOD."
-    if st.button("‘Small change’ (FAAH)"):
-        st.session_state._queued_input = "Client said it’s a small change, can we do it today?"
+    if st.button("Client wants new ideas by EOD (FAAH)"):
+        st.session_state._queued_input = "Client is asking for new ideas by EOD, same budget."
+    if st.button("‘Small change’ make it pop (FAAH)"):
+        st.session_state._queued_input = "It’s a small change, just make it pop."
+    if st.button("Good news: approved (Celebrate)"):
+        st.session_state._queued_input = "Good news! Client approved the approach."
     if st.button("Draft client email"):
         st.session_state._queued_input = "Draft an email to the client with status and next steps."
     if st.button("Standup update"):
         st.session_state._queued_input = "Help me write a standup update."
-    if st.button("Meeting agenda"):
-        st.session_state._queued_input = "Create a 30-minute meeting agenda for a client check-in."
-    if st.button("RAID entry"):
-        st.session_state._queued_input = "Turn this into a RAID log entry: data access is delayed."
+    if st.button("Play FAAH now"):
+        st.session_state._queued_input = "/faah"
 
 # =============================
 # Header
@@ -429,18 +410,37 @@ with st.sidebar:
 st.markdown(
     """
 <div class="hero">
-  <div class="title">Office Chatbot (Hinglish) • FAAH on corporate pain</div>
+  <div class="title">Office Chatbot (Hinglish) • FAAH + Sprinkle</div>
   <div class="sub">
-    Ask for: <span class="kbd">email</span> <span class="kbd">standup</span> <span class="kbd">agenda</span>
-    <span class="kbd">RAID</span> <span class="kbd">notes</span> <span class="kbd">slides</span> <span class="kbd">workplan</span>
+    FAAH triggers on corporate pain (new ideas / EOD / small change / quick call).
+    Celebrate triggers on good news (approved / we won / go-live).
     <br><br>
-    FAAH plays when you type things like: <span class="kbd">client new ideas</span>, <span class="kbd">small change</span>,
-    <span class="kbd">quick deck</span>, <span class="kbd">EOD</span>, <span class="kbd">ASAP</span>, <span class="kbd">circle back</span>.
+    <span class="kbd">Try:</span>
+    <span class="kbd">Client wants new ideas by EOD</span>
+    <span class="kbd">Good news: approved</span>
+    <span class="kbd">Draft an email</span>
   </div>
 </div>
 """,
     unsafe_allow_html=True,
 )
+
+# =============================
+# Render pending FX (runs before chat)
+# =============================
+if st.session_state.pending_toast:
+    st.toast(st.session_state.pending_toast)
+    st.session_state.pending_toast = None
+
+if st.session_state.pending_fx == "balloons":
+    st.balloons()
+    st.session_state.pending_fx = None
+elif st.session_state.pending_fx == "snow":
+    st.snow()
+    st.session_state.pending_fx = None
+elif st.session_state.pending_fx == "fire":
+    # "fire" is a toast (lightweight, always works)
+    st.session_state.pending_fx = None
 
 # =============================
 # Render pending audio
@@ -457,7 +457,7 @@ if st.session_state.pending_audio is not None:
 # Chat
 # =============================
 st.markdown('<div class="card">', unsafe_allow_html=True)
-st.markdown('<div class="small">Tip: type “Client wants new ideas by EOD” (FAAH). Use /help or /triggers.</div>', unsafe_allow_html=True)
+st.markdown('<div class="small">Tip: “Client wants new ideas by EOD” (FAAH). “Good news approved” (sprinkle/balloons).</div>', unsafe_allow_html=True)
 
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
@@ -479,9 +479,24 @@ if user_text:
     st.session_state.messages.append({"role": "user", "content": user_text, "ts": ts})
 
     faah_hit = (user_text.strip().lower() == "/faah") or should_play_faah(user_text, sensitivity)
-    reply = office_reply(user_text, faah_hit=faah_hit)
+    good_hit = is_good_news(user_text)
+
+    reply = office_reply(user_text, faah_hit=faah_hit, good_hit=good_hit)
     st.session_state.messages.append({"role": "assistant", "content": reply, "ts": ts})
 
+    # FX for good news
+    if good_hit and celebrate_fx != "Off":
+        if celebrate_fx == "Balloons":
+            st.session_state.pending_fx = "balloons"
+            st.session_state.pending_toast = "🔥 Big W. Approved / go-live vibes."
+        elif celebrate_fx.startswith("Snow"):
+            st.session_state.pending_fx = "snow"
+            st.session_state.pending_toast = "✨ Sprinkle time. Good news locked."
+        elif celebrate_fx.startswith("Fire"):
+            st.session_state.pending_fx = "fire"
+            st.session_state.pending_toast = "🔥 Fire. Good news just dropped."
+
+    # FAAH sound (only on pain triggers / manual)
     if faah_hit:
         if attempt_autoplay and (not st.session_state.sound_enabled):
             st.warning(DEFAULT_SOUND_ERROR)
