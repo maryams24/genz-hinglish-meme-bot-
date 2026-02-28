@@ -101,8 +101,6 @@ def ss_init():
         st.session_state.messages = []
     if "sound_enabled" not in st.session_state:
         st.session_state.sound_enabled = False
-    if "pending_audio" not in st.session_state:
-        st.session_state.pending_audio = None  # {bytes,mime,label,autoplay,nonce}
     if "audio_nonce" not in st.session_state:
         st.session_state.audio_nonce = 0
     if "faah_upload_bytes" not in st.session_state:
@@ -115,6 +113,7 @@ def ss_init():
         st.session_state.pending_fx = None  # "balloons" | "snow" | "fire"
     if "pending_toast" not in st.session_state:
         st.session_state.pending_toast = None
+
 
 ss_init()
 
@@ -162,16 +161,6 @@ def get_faah_bytes() -> tuple[bytes, str, str]:
         )
     return (make_faah_synth_wav(), "audio/wav", "FAAH (synth)")
 
-def queue_audio(bytes_data: bytes, mime: str, label: str, autoplay: bool):
-    st.session_state.audio_nonce += 1
-    st.session_state.pending_audio = {
-        "bytes": bytes_data,
-        "mime": mime,
-        "label": label,
-        "autoplay": autoplay,
-        "nonce": st.session_state.audio_nonce,
-    }
-
 def render_autoplay_audio(audio_bytes: bytes, mime: str, nonce: int):
     b64 = base64.b64encode(audio_bytes).decode("ascii")
     html = f"""
@@ -189,8 +178,19 @@ def render_autoplay_audio(audio_bytes: bytes, mime: str, nonce: int):
     """
     components.html(html, height=0, width=0)
 
+def play_faah_immediately(autoplay: bool):
+    # Renders audio right now (same run) so it plays immediately on trigger.
+    b, m, label = get_faah_bytes()
+    st.session_state.audio_nonce += 1
+    nonce = st.session_state.audio_nonce
+
+    st.caption(label)
+    if autoplay and st.session_state.sound_enabled:
+        render_autoplay_audio(b, m, nonce)
+    st.audio(b, format=m)
+
 # =============================
-# FAAH triggers (corporate pain points)
+# FAAH triggers (stressful / funny corporate pain)
 # =============================
 TRIGGERS_LOW = [
     r"\bclient\b.*\bnew ideas?\b",
@@ -219,6 +219,7 @@ TRIGGERS_HIGH = TRIGGERS_MED + [
     r"\bdeck\b.*\btonight\b",
     r"\bclient\b.*\bnew requirement\b",
     r"\bmake it pop\b",
+    r"\bcan you share the deck\b.*\bnow\b",
 ]
 
 def should_play_faah(text: str, sensitivity: str) -> bool:
@@ -259,6 +260,7 @@ FAAH_QUIPS = [
     "FAAH. ‘One last thing’—aur phir last ke 7 cousins aate hain.",
     "FAAH. ‘Make it pop’—PowerPoint bhi therapist maang raha hai.",
     "FAAH. ‘New ideas’ with same budget—innovation ka jugaad edition.",
+    "FAAH. ‘ASAP’ bola, matlab aaj raat ka plan cancel.",
 ]
 GOOD_NEWS_QUIPS = [
     "W. Aaj toh deliverable ne smile diya. Shabaash.",
@@ -289,15 +291,14 @@ def office_reply(user_text: str, faah_hit: bool, good_hit: bool) -> str:
             "Ask for: email / standup / agenda / RAID / notes / slides / workplan."
         )
     if low == "/triggers":
-        return "FAAH triggers (by sensitivity): client new ideas, small change, quick deck, EOD/ASAP, quick call, circle back, make it pop."
+        return "FAAH triggers: client new ideas, small change, quick deck, EOD/ASAP, quick call, circle back, make it pop (depends on sensitivity)."
     if low == "/faah":
         return "FAAH triggered (manual)."
 
     if good_hit:
         return (
             f"{random.choice(GOOD_NEWS_QUIPS)}\n\n"
-            "Want me to turn this into a client-safe update?\n"
-            "Send: what happened + metric + next step + ask (if any). (Hinglish chalega)"
+            "Want a client-safe update? Send: what happened + metric + next step + ask. (Hinglish chalega)"
         )
 
     if any(k in low for k in ["standup", "status update", "daily update", "scrum"]):
@@ -387,12 +388,12 @@ with st.sidebar:
     st.divider()
     st.subheader("Celebrate FX (good news)")
     celebrate_fx = st.radio("Effect", ["Balloons", "Snow (sprinkle)", "Fire toast only", "Off"], index=0)
-    st.caption("Triggers on ‘good news’, ‘approved’, ‘we won’, ‘go-live’, etc.")
+    st.caption("Triggers on: good news / approved / we won / go-live / client happy")
 
     st.divider()
     st.subheader("Shortcuts")
     if st.button("Client wants new ideas by EOD (FAAH)"):
-        st.session_state._queued_input = "Client is asking for new ideas by EOD, same budget."
+        st.session_state._queued_input = "Client wants new ideas by EOD, same budget."
     if st.button("‘Small change’ make it pop (FAAH)"):
         st.session_state._queued_input = "It’s a small change, just make it pop."
     if st.button("Good news: approved (Celebrate)"):
@@ -410,7 +411,7 @@ with st.sidebar:
 st.markdown(
     """
 <div class="hero">
-  <div class="title">Office Chatbot (Hinglish) • FAAH + Sprinkle</div>
+  <div class="title">Office Chatbot (Hinglish) • FAAH instantly on stress</div>
   <div class="sub">
     FAAH triggers on corporate pain (new ideas / EOD / small change / quick call).
     Celebrate triggers on good news (approved / we won / go-live).
@@ -426,7 +427,7 @@ st.markdown(
 )
 
 # =============================
-# Render pending FX (runs before chat)
+# Render pending FX (previous run)
 # =============================
 if st.session_state.pending_toast:
     st.toast(st.session_state.pending_toast)
@@ -439,25 +440,16 @@ elif st.session_state.pending_fx == "snow":
     st.snow()
     st.session_state.pending_fx = None
 elif st.session_state.pending_fx == "fire":
-    # "fire" is a toast (lightweight, always works)
     st.session_state.pending_fx = None
-
-# =============================
-# Render pending audio
-# =============================
-if st.session_state.pending_audio is not None:
-    p = st.session_state.pending_audio
-    st.caption(p["label"])
-    if attempt_autoplay and p["autoplay"] and st.session_state.sound_enabled:
-        render_autoplay_audio(p["bytes"], p["mime"], p["nonce"])
-    st.audio(p["bytes"], format=p["mime"])
-    st.session_state.pending_audio = None
 
 # =============================
 # Chat
 # =============================
 st.markdown('<div class="card">', unsafe_allow_html=True)
-st.markdown('<div class="small">Tip: “Client wants new ideas by EOD” (FAAH). “Good news approved” (sprinkle/balloons).</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="small">Tip: “Client wants new ideas by EOD” = FAAH instantly. Use /help or /triggers.</div>',
+    unsafe_allow_html=True,
+)
 
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
@@ -484,7 +476,7 @@ if user_text:
     reply = office_reply(user_text, faah_hit=faah_hit, good_hit=good_hit)
     st.session_state.messages.append({"role": "assistant", "content": reply, "ts": ts})
 
-    # FX for good news
+    # Celebrate FX (will show next rerun; toast shows next run too)
     if good_hit and celebrate_fx != "Off":
         if celebrate_fx == "Balloons":
             st.session_state.pending_fx = "balloons"
@@ -496,11 +488,11 @@ if user_text:
             st.session_state.pending_fx = "fire"
             st.session_state.pending_toast = "🔥 Fire. Good news just dropped."
 
-    # FAAH sound (only on pain triggers / manual)
+    # FAAH sound: render immediately in THIS run (so it plays right away)
     if faah_hit:
         if attempt_autoplay and (not st.session_state.sound_enabled):
             st.warning(DEFAULT_SOUND_ERROR)
-        b, m, label = get_faah_bytes()
-        queue_audio(b, m, label=label, autoplay=attempt_autoplay)
+        play_faah_immediately(autoplay=attempt_autoplay)
 
+    # Refresh chat so the new messages appear
     st.rerun()
