@@ -10,3 +10,4 @@
 ## Use
 - Set Sound mode = **FAAH synth**
 - Click **Send FAAH example** (or type `/meme faah ...`)
+https://jfu6njc8qixbyjbxeppfoh.streamlit.app/#paste-your-raw-bullets-and-i-ll-tighten-them-template-done
