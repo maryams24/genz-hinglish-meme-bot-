@@ -99,8 +99,8 @@ div[data-testid="stChatInput"] textarea{ color: var(--ink) !important; }
 def ss_init():
     if "messages" not in st.session_state:
         st.session_state.messages = []
-    if "sound_enabled" not in st.session_state:
-        st.session_state.sound_enabled = False
+    if "sound_unlocked" not in st.session_state:
+        st.session_state.sound_unlocked = False
     if "audio_nonce" not in st.session_state:
         st.session_state.audio_nonce = 0
     if "faah_upload_bytes" not in st.session_state:
@@ -109,18 +109,13 @@ def ss_init():
         st.session_state.faah_upload_name = None
     if "_queued_input" not in st.session_state:
         st.session_state._queued_input = None
-    if "pending_fx" not in st.session_state:
-        st.session_state.pending_fx = None  # "balloons" | "snow" | "fire"
-    if "pending_toast" not in st.session_state:
-        st.session_state.pending_toast = None
-
 
 ss_init()
 
 # =============================
 # Audio helpers (FAAH upload + synth fallback)
 # =============================
-DEFAULT_SOUND_ERROR = "Autoplay blocked. Click ‘Enable Sound’ once, then trigger again."
+AUTOPLAY_NOTE = "If sound doesn’t autoplay: click **Enable Sound** once (browser rule)."
 
 def _to_wav_bytes(sr: int, samples_f32: list[float]) -> bytes:
     pcm = bytearray()
@@ -136,7 +131,13 @@ def _to_wav_bytes(sr: int, samples_f32: list[float]) -> bytes:
         wf.writeframes(bytes(pcm))
     return buf.getvalue()
 
+def make_silence_wav(ms: int = 80) -> bytes:
+    sr = 22050
+    n = int(sr * (ms / 1000.0))
+    return _to_wav_bytes(sr, [0.0] * n)
+
 def make_faah_synth_wav() -> bytes:
+    # Short comedic down-sweep + noise burst
     sr, dur = 22050, 0.26
     n = int(sr * dur)
     out = []
@@ -161,71 +162,62 @@ def get_faah_bytes() -> tuple[bytes, str, str]:
         )
     return (make_faah_synth_wav(), "audio/wav", "FAAH (synth)")
 
-def render_autoplay_audio(audio_bytes: bytes, mime: str, nonce: int):
+def js_play_audio_now(audio_bytes: bytes, mime: str, nonce: int, volume: float = 1.0):
+    # Uses JS Audio() play. Works ONLY after a user gesture in most browsers.
     b64 = base64.b64encode(audio_bytes).decode("ascii")
+    vol = max(0.0, min(1.0, float(volume)))
     html = f"""
-    <audio id="faah{nonce}" autoplay>
-      <source src="data:{mime};base64,{b64}" type="{mime}">
-    </audio>
     <script>
-      (function(){{
-        const el = document.getElementById("faah{nonce}");
-        if(!el) return;
-        const p = el.play();
-        if(p && p.catch) p.catch(()=>{{}});
+      (async () => {{
+        try {{
+          const a = new Audio("data:{mime};base64,{b64}");
+          a.volume = {vol};
+          await a.play();
+        }} catch (e) {{
+          console.log("autoplay blocked", e);
+        }}
       }})();
     </script>
     """
     components.html(html, height=0, width=0)
 
-def play_faah_immediately(autoplay: bool):
-    # Renders audio right now (same run) so it plays immediately on trigger.
+def play_faah_immediately(try_autoplay: bool):
     b, m, label = get_faah_bytes()
-    st.session_state.audio_nonce += 1
-    nonce = st.session_state.audio_nonce
-
     st.caption(label)
-    if autoplay and st.session_state.sound_enabled:
-        render_autoplay_audio(b, m, nonce)
-    st.audio(b, format=m)
+    st.audio(b, format=m)  # always show a clickable fallback player
+    if try_autoplay and st.session_state.sound_unlocked:
+        st.session_state.audio_nonce += 1
+        js_play_audio_now(b, m, st.session_state.audio_nonce, volume=1.0)
+    elif try_autoplay and (not st.session_state.sound_unlocked):
+        st.info(AUTOPLAY_NOTE)
 
 # =============================
 # FAAH triggers (stressful / funny corporate pain)
 # =============================
-TRIGGERS_LOW = [
+TRIGGERS = [
     r"\bclient\b.*\bnew ideas?\b",
     r"\bclient\b.*\bmore ideas?\b",
     r"\bclient\b.*\bbrainstorm\b",
     r"\bclient\b.*\bfresh ideas?\b",
     r"\bclient\b.*\binnovate\b",
-]
-TRIGGERS_MED = TRIGGERS_LOW + [
-    r"\bsmall change\b",
-    r"\bquick deck\b",
+    r"\bclient wants new ideas\b",
     r"\bby eod\b|\beod\b",
     r"\basap\b",
+    r"\bsmall change\b",
+    r"\bquick deck\b",
     r"\bquick call\b|\bhop on\b.*\bcall\b",
-    r"\brebaseline\b",
-    r"\bscope change\b|\bchange request\b",
-    r"\bkeep it simple\b.*\bimpactful\b",
-]
-TRIGGERS_HIGH = TRIGGERS_MED + [
     r"\bcircle back\b",
-    r"\bsynergy\b",
-    r"\bvalue add\b|\bvalue-add\b",
-    r"\blow effort\b.*\bhigh impact\b",
+    r"\bkeep it simple\b.*\bimpactful\b",
+    r"\bmake it pop\b",
     r"\bone last thing\b",
     r"\bpls fix\b|\bplz fix\b|\bplease fix\b",
-    r"\bdeck\b.*\btonight\b",
-    r"\bclient\b.*\bnew requirement\b",
-    r"\bmake it pop\b",
-    r"\bcan you share the deck\b.*\bnow\b",
+    r"\brebaseline\b",
+    r"\bscope change\b|\bchange request\b",
 ]
 
-def should_play_faah(text: str, sensitivity: str) -> bool:
+def should_play_faah(text: str) -> bool:
     t = (text or "").lower().strip()
-    patterns = TRIGGERS_LOW if sensitivity == "Low" else TRIGGERS_MED if sensitivity == "Medium" else TRIGGERS_HIGH
-    return any(re.search(p, t) for p in patterns)
+    return any(re.search(p, t) for p in TRIGGERS)
 
 # =============================
 # Celebrate triggers (good news)
@@ -237,9 +229,8 @@ GOOD_NEWS_PATTERNS = [
     r"\bsigned\b|\bcontract signed\b|\bpo issued\b",
     r"\bgo[- ]live\b|\blaunch(ed)?\b",
     r"\bkudos\b|\bshoutout\b|\bappreciation\b",
-    r"\bpromotion\b|\bincrement\b|\braise\b",
     r"\bclient loved\b|\bclient happy\b|\bpositive feedback\b",
-    r"\bpassed\b.*\buat\b|\buat passed\b",
+    r"\buat passed\b|\bpassed\b.*\buat\b",
 ]
 
 def is_good_news(text: str) -> bool:
@@ -286,19 +277,16 @@ def office_reply(user_text: str, faah_hit: bool, good_hit: bool) -> str:
         return (
             "Commands:\n"
             "- /faah (play FAAH)\n"
-            "- /triggers (show what triggers FAAH)\n"
             "- /help\n\n"
             "Ask for: email / standup / agenda / RAID / notes / slides / workplan."
         )
-    if low == "/triggers":
-        return "FAAH triggers: client new ideas, small change, quick deck, EOD/ASAP, quick call, circle back, make it pop (depends on sensitivity)."
     if low == "/faah":
         return "FAAH triggered (manual)."
 
     if good_hit:
         return (
             f"{random.choice(GOOD_NEWS_QUIPS)}\n\n"
-            "Want a client-safe update? Send: what happened + metric + next step + ask. (Hinglish chalega)"
+            "Batao: kya approve hua + metric + next step. Main client-safe update bana dunga."
         )
 
     if any(k in low for k in ["standup", "status update", "daily update", "scrum"]):
@@ -323,47 +311,34 @@ def office_reply(user_text: str, faah_hit: bool, good_hit: bool) -> str:
     if any(k in low for k in ["agenda", "meeting agenda"]):
         return (
             f"{random.choice(TINY_NORMAL_QUIPS)}\n\n"
-            "30-min agenda:\n"
-            "1) Outcomes (2)\n2) Progress (8)\n3) Decisions (8)\n4) Risks (6)\n5) Next steps (6)\n\n"
-            "Share topic + attendees; I’ll tailor it."
-        )
-
-    if any(k in low for k in ["mom", "minutes", "meeting notes", "notes"]):
-        return (
-            f"{random.choice(TINY_NORMAL_QUIPS)}\n\n"
-            "Meeting notes template:\nContext:\n- \n\nAttendees:\n- \n\nDecisions:\n- \n\nActions (Owner | Due | Item):\n- \n\nRisks/Issues:\n- "
+            "30-min agenda:\n1) Outcomes (2)\n2) Progress (8)\n3) Decisions (8)\n4) Risks (6)\n5) Next steps (6)\n\n"
+            "Topic + attendees bhejo, main tailor kar dunga."
         )
 
     if any(k in low for k in ["raid", "risk", "issue", "blocker", "dependency", "assumption"]):
         return (
             f"{random.choice(TINY_NORMAL_QUIPS)}\n\n"
-            "RAID entry:\nType:\nDescription:\nImpact:\nLikelihood:\nOwner:\nMitigation:\nDue:\nStatus:\n\nPaste your sentence and I’ll format it."
+            "RAID entry:\nType:\nDescription:\nImpact:\nLikelihood:\nOwner:\nMitigation:\nDue:\nStatus:\n\nPaste your sentence."
         )
 
     if any(k in low for k in ["slides", "deck", "ppt", "storyline"]):
         return (
             f"{random.choice(TINY_NORMAL_QUIPS)}\n\n"
             "6-slide storyline:\n1) Context\n2) Current state\n3) Insights\n4) Options + trade-offs\n5) Recommendation\n6) Roadmap + risks\n\n"
-            "Tell me audience + decision + time."
-        )
-
-    if any(k in low for k in ["workplan", "project plan", "timeline", "plan"]):
-        return (
-            f"{random.choice(TINY_NORMAL_QUIPS)}\n\n"
-            "Workplan starter:\nW1 align\nW2 assess\nW3 options\nW4 recommend + roadmap\n\nTell me duration + deliverables."
+            "Audience + decision + time tell karo."
         )
 
     if faah_hit:
         return (
             f"{random.choice(FAAH_QUIPS)}\n\n"
-            "Client-ready idea structure (fast):\n"
+            "Fast idea structure (client-safe):\n"
             "A) Optimize (low risk)\nB) Enable (medium)\nC) Transform (bold)\n\n"
-            "Bas 3 inputs do: objective, constraints, and decision-maker."
+            "Bas 3 inputs do: objective, constraints, decision-maker."
         )
 
     return (
         f"{random.choice(TINY_NORMAL_QUIPS)}\n\n"
-        "Tell me: email / standup / agenda / RAID / notes / slides / workplan. Paste rough text; I’ll rewrite it cleanly."
+        "Tell me: email / standup / agenda / RAID / slides. Hinglish bhi chalega."
     )
 
 # =============================
@@ -378,17 +353,20 @@ with st.sidebar:
         st.session_state.faah_upload_mime = up.type or ("audio/mpeg" if up.name.lower().endswith(".mp3") else "audio/wav")
         st.success(f"Loaded: {up.name}")
 
-    attempt_autoplay = st.toggle("Attempt autoplay", value=True)
-    if st.button("Enable Sound (click once)"):
-        st.session_state.sound_enabled = True
-        st.success("Sound enabled.")
+    try_autoplay = st.toggle("Attempt autoplay", value=True)
 
-    sensitivity = st.selectbox("FAAH sensitivity", ["Low", "Medium", "High"], index=2)
+    if st.button("Enable Sound (required once)"):
+        # Browser needs a user gesture; we play a tiny silent audio to "unlock".
+        st.session_state.sound_unlocked = True
+        st.success("Sound unlocked for this session.")
+        st.session_state.audio_nonce += 1
+        js_play_audio_now(make_silence_wav(80), "audio/wav", st.session_state.audio_nonce, volume=0.0)
+
+    st.caption("Tip: FAAH triggers on “Client wants new ideas by EOD”, “ASAP”, “small change”, etc.")
 
     st.divider()
     st.subheader("Celebrate FX (good news)")
     celebrate_fx = st.radio("Effect", ["Balloons", "Snow (sprinkle)", "Fire toast only", "Off"], index=0)
-    st.caption("Triggers on: good news / approved / we won / go-live / client happy")
 
     st.divider()
     st.subheader("Shortcuts")
@@ -398,10 +376,6 @@ with st.sidebar:
         st.session_state._queued_input = "It’s a small change, just make it pop."
     if st.button("Good news: approved (Celebrate)"):
         st.session_state._queued_input = "Good news! Client approved the approach."
-    if st.button("Draft client email"):
-        st.session_state._queued_input = "Draft an email to the client with status and next steps."
-    if st.button("Standup update"):
-        st.session_state._queued_input = "Help me write a standup update."
     if st.button("Play FAAH now"):
         st.session_state._queued_input = "/faah"
 
@@ -411,15 +385,18 @@ with st.sidebar:
 st.markdown(
     """
 <div class="hero">
-  <div class="title">Office Chatbot (Hinglish) • FAAH instantly on stress</div>
+  <div class="title">Office Chatbot (Hinglish) • FAAH on stress</div>
   <div class="sub">
-    FAAH triggers on corporate pain (new ideas / EOD / small change / quick call).
-    Celebrate triggers on good news (approved / we won / go-live).
-    <br><br>
-    <span class="kbd">Try:</span>
+    FAAH plays instantly on stressful/funny text like:
     <span class="kbd">Client wants new ideas by EOD</span>
-    <span class="kbd">Good news: approved</span>
-    <span class="kbd">Draft an email</span>
+    <span class="kbd">ASAP</span>
+    <span class="kbd">small change</span>
+    <span class="kbd">make it pop</span>
+    <br><br>
+    Good news triggers balloons/sprinkle:
+    <span class="kbd">approved</span>
+    <span class="kbd">we won</span>
+    <span class="kbd">go-live</span>
   </div>
 </div>
 """,
@@ -427,72 +404,58 @@ st.markdown(
 )
 
 # =============================
-# Render pending FX (previous run)
+# Input (chat_input is pinned bottom anyway)
 # =============================
-if st.session_state.pending_toast:
-    st.toast(st.session_state.pending_toast)
-    st.session_state.pending_toast = None
+queued = st.session_state.get("_queued_input")
+if queued:
+    st.session_state._queued_input = None
 
-if st.session_state.pending_fx == "balloons":
-    st.balloons()
-    st.session_state.pending_fx = None
-elif st.session_state.pending_fx == "snow":
-    st.snow()
-    st.session_state.pending_fx = None
-elif st.session_state.pending_fx == "fire":
-    st.session_state.pending_fx = None
+user_text = queued or st.chat_input("Type here… (e.g., Client wants new ideas by EOD)")
 
 # =============================
-# Chat
+# Handle message (NO manual st.rerun)
+# =============================
+faah_hit = False
+good_hit = False
+
+if user_text:
+    ts = dt.datetime.now().strftime("%H:%M")
+    st.session_state.messages.append({"role": "user", "content": user_text, "ts": ts})
+
+    faah_hit = (user_text.strip().lower() == "/faah") or should_play_faah(user_text)
+    good_hit = is_good_news(user_text)
+
+    reply = office_reply(user_text, faah_hit=faah_hit, good_hit=good_hit)
+    st.session_state.messages.append({"role": "assistant", "content": reply, "ts": ts})
+
+# =============================
+# FX (good news)
+# =============================
+if good_hit and celebrate_fx != "Off":
+    if celebrate_fx == "Balloons":
+        st.toast("🔥 Big W. Approved / go-live vibes.")
+        st.balloons()
+    elif celebrate_fx.startswith("Snow"):
+        st.toast("✨ Sprinkle time. Good news locked.")
+        st.snow()
+    elif celebrate_fx.startswith("Fire"):
+        st.toast("🔥 Fire. Good news just dropped.")
+
+# =============================
+# FAAH sound (plays immediately on the same run)
+# =============================
+if faah_hit:
+    play_faah_immediately(try_autoplay=try_autoplay)
+
+# =============================
+# Chat history
 # =============================
 st.markdown('<div class="card">', unsafe_allow_html=True)
-st.markdown(
-    '<div class="small">Tip: “Client wants new ideas by EOD” = FAAH instantly. Use /help or /triggers.</div>',
-    unsafe_allow_html=True,
-)
+st.markdown('<div class="small">Office-only. Hinglish allowed. Try the stress phrases for FAAH.</div>', unsafe_allow_html=True)
 
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
         st.markdown(f'<div class="small">{m["ts"]}</div>', unsafe_allow_html=True)
 
-queued = st.session_state.get("_queued_input")
-if queued:
-    st.session_state._queued_input = None
-
-user_text = queued or st.chat_input("Type here…")
 st.markdown("</div>", unsafe_allow_html=True)
-
-# =============================
-# Handle message
-# =============================
-if user_text:
-    ts = dt.datetime.now().strftime("%H:%M")
-    st.session_state.messages.append({"role": "user", "content": user_text, "ts": ts})
-
-    faah_hit = (user_text.strip().lower() == "/faah") or should_play_faah(user_text, sensitivity)
-    good_hit = is_good_news(user_text)
-
-    reply = office_reply(user_text, faah_hit=faah_hit, good_hit=good_hit)
-    st.session_state.messages.append({"role": "assistant", "content": reply, "ts": ts})
-
-    # Celebrate FX (will show next rerun; toast shows next run too)
-    if good_hit and celebrate_fx != "Off":
-        if celebrate_fx == "Balloons":
-            st.session_state.pending_fx = "balloons"
-            st.session_state.pending_toast = "🔥 Big W. Approved / go-live vibes."
-        elif celebrate_fx.startswith("Snow"):
-            st.session_state.pending_fx = "snow"
-            st.session_state.pending_toast = "✨ Sprinkle time. Good news locked."
-        elif celebrate_fx.startswith("Fire"):
-            st.session_state.pending_fx = "fire"
-            st.session_state.pending_toast = "🔥 Fire. Good news just dropped."
-
-    # FAAH sound: render immediately in THIS run (so it plays right away)
-    if faah_hit:
-        if attempt_autoplay and (not st.session_state.sound_enabled):
-            st.warning(DEFAULT_SOUND_ERROR)
-        play_faah_immediately(autoplay=attempt_autoplay)
-
-    # Refresh chat so the new messages appear
-    st.rerun()
