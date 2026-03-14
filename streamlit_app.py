@@ -1,15 +1,18 @@
-# officebuddy_interactive.py
+# officebuddy_colored.py
 import streamlit as st
 import datetime as dt
 
 # =========================
 # Page config
-st.set_page_config(page_title="OfficeBuddy • Interactive Bot", layout="centered")
+st.set_page_config(page_title="OfficeBuddy • Colored Bot", layout="centered")
 st.title("OfficeBuddy • Interactive Office Helper")
 st.markdown("""
 <style>
 .stButton>button {background-color: #4CAF50; color: white; font-weight:bold; margin:3px;}
-.block-container { max-width: 800px; padding-top:1rem;}
+.ticket-msg {background-color:#FFF4E5; padding:10px; border-radius:8px;}
+.leave-msg {background-color:#E5F7FF; padding:10px; border-radius:8px;}
+.email-msg {background-color:#F0E5FF; padding:10px; border-radius:8px;}
+.policy-msg {background-color:#E5FFE5; padding:10px; border-radius:8px;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -49,7 +52,8 @@ FLOWS = {
             ("Summary", "Short summary (one line)"),
             ("Business impact", "Who/what is blocked?"),
             ("Urgency", "Urgency level (Low/Medium/High/Critical)")
-        ]
+        ],
+        "color": "ticket-msg"
     },
     "leave": {
         "steps": [
@@ -59,7 +63,8 @@ FLOWS = {
             ("Start date", "YYYY-MM-DD"),
             ("End date", "YYYY-MM-DD"),
             ("Reason", "Reason for leave")
-        ]
+        ],
+        "color": "leave-msg"
     },
     "email": {
         "steps": [
@@ -67,7 +72,11 @@ FLOWS = {
             ("To", "Recipient email"),
             ("Subject", "Email subject"),
             ("Body", "Email body")
-        ]
+        ],
+        "color": "email-msg"
+    },
+    "policy": {
+        "color": "policy-msg"
     }
 }
 
@@ -91,7 +100,6 @@ def flow_next_step(user_input):
         st.session_state.flow_step = 0
         return "✅ Done! Check export below."
     else:
-        # Next prompt
         _, prompt = FLOWS[flow]["steps"][st.session_state.flow_step]
         return f"{prompt} (required)"
 
@@ -99,8 +107,7 @@ def simple_reply(user_input):
     user_input = user_input.lower()
     
     if user_input in ["/help", "help"]:
-        return ("Commands:\n- raise ticket\n- leave request\n- draft email\n- policy question\n"
-                "- /clear to reset chat")
+        return "Commands:\n- raise ticket\n- leave request\n- draft email\n- policy question\n- /clear to reset chat"
     if user_input == "/clear":
         st.session_state.messages = []
         st.session_state.flow = None
@@ -134,7 +141,7 @@ def simple_reply(user_input):
         else:
             return "No policy files uploaded. Upload .txt/.md in the sidebar to enable policy Q&A."
     
-    return "I can help with tickets, leave requests, emails, and policy Q&A. Type /help for examples."
+    return "I can help with tickets, leave requests, emails, and policy Q&A. Type /help for commands."
 
 # =========================
 # Chat input
@@ -142,15 +149,27 @@ user_input = st.chat_input("Ask anything office-related (e.g., raise a ticket)")
 if user_input:
     ts = dt.datetime.now().strftime("%H:%M")
     reply = simple_reply(user_input)
-    st.session_state.messages.append({"role": "user", "content": user_input, "ts": ts})
-    st.session_state.messages.append({"role": "assistant", "content": reply, "ts": ts})
+    st.session_state.messages.append({"role": "user", "content": user_input, "ts": ts, "type": "user"})
+    # Decide color
+    if st.session_state.flow in FLOWS:
+        color_class = FLOWS[st.session_state.flow]["color"]
+    elif "policy" in user_input.lower():
+        color_class = FLOWS["policy"]["color"]
+    else:
+        color_class = ""
+    st.session_state.messages.append({"role": "assistant", "content": reply, "ts": ts, "type": color_class})
 
-# Display chat messages
+# =========================
+# Display chat messages with colors
 for m in st.session_state.messages:
-    with st.chat_message(m["role"]):
-        st.markdown(m["content"])
-        st.caption(m["ts"])
+    if m["role"] == "assistant" and m["type"]:
+        st.markdown(f'<div class="{m["type"]}">{m["content"]}</div>', unsafe_allow_html=True)
+    else:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
+            st.caption(m["ts"])
 
+# =========================
 # Export last output
 if st.session_state.last_output:
     st.download_button("Download last output", data=st.session_state.last_output, file_name="officebuddy_output.txt")
